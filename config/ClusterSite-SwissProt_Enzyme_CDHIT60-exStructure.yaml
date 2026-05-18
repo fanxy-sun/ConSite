@@ -1,0 +1,122 @@
+model:
+  ResidueEncoderAlpha:
+    esm_model_name: "ESM-2-650M"
+    bridge_output_dim: 128
+    rxnfp_output_dim: 256
+
+    # RGMM
+    rgmm_num_layers: 3
+    init_k_size: 5
+    pka_depth: 4
+    scale_factor: 4
+    
+    # projection_head
+    hidden_dim: 256
+    output_dim: 128
+
+    num_class: 4
+    dropout: 0.1
+
+  ActiveSiteEmbeddingNet:
+    input_dim: 128
+    hidden_dim: 256
+    output_dim: 128
+    dropout: 0.1
+
+
+train:
+  ResidueEncoderAlphaTrainer:
+    # Dataloader
+    batch_size: 18
+    num_workers: 64
+    pin_memory: true
+    persistent_workers: true
+
+    # Training hyperparameters
+    epochs: 40
+    learning_rate: 0.0002
+    weight_decay: 0.01
+    accumulation_steps: 2
+    optimizer: "adamw"
+    scheduler: "cosine"
+    warmup_epochs: 0.8
+    min_lr: 0.0000001
+    unfreeze_esm_layers: [28, 29, 30, 31, 32, 33]
+
+    # Loss configuration
+    loss_type: "ce"
+    class_weights: [0.5, 1, 1, 1]   # update
+    label_smoothing: 0.0
+    main_loss_weight: 1.0
+    gradient_clip: 20.0   # update
+    
+    # Validation and checkpointing
+    val_frequency: 1
+    save_frequency: 1
+    early_stopping_patience: 30
+    log_frequency: 10
+
+    # Hardware and optimization
+    enable_memory_optimization: true
+    memory_cleanup_frequency: 200
+    use_efficient_attention_backends: true
+    cudnn_benchmark: true
+    use_tf32: true
+
+  SiteSupConTrainer:    # from ./ckpt/SwissProt_Enzyme_CDHIT60/exStructure/ResidueEncoder/checkpoint_epoch_4.pt
+    learning_rate: 0.0001
+    epoch: 5
+    batch_size: 18                  # 每个 batch 的蛋白质数量
+    num_workers: 64
+    hard_ratio: 0.5                 # ECWeightedBatchSampler 中“难样本”占比
+
+    unfreeze_esm_layers: [28, 29, 30, 31, 32, 33]   # - []: 完全冻结 ESM，仅训练 GNN + Head + 投影头。  - [28,29,30,31,32,33]: 只解冻最顶层
+
+    # CE 主任务
+    loss_type: "ce"
+    class_weights: [0.5, 10.0, 10.0, 10.0]   # 0 类背景 down-weight，1/2/3 up-weight
+    label_smoothing: 0.0
+    gradient_clip: 20.0
+
+    # SupCon 子任务
+    supcon:
+      lambda_ce: 1.0          # CE 权重（保证分类效果）
+      lambda_supcon: 1.0      # SupCon 权重（让表征充分对比化）
+      temperature: 0.1        # 经典 SupCon 默认温度
+      hard_pos_weight: 2.0    # hard positive 的附加权重
+      hard_neg_weight: 2.0    # hard negative 的附加权重
+
+
+  ActiveSiteEmbeddingNetTrainer:    # from ./ckpt/SwissProt_Enzyme_CDHIT60/exStructure/ResidueEncoder/checkpoint_epoch_4.pt
+    learning_rate: 0.005
+    n_pos_site: 9
+    n_neg_site: 39
+    hard_neg_ratio: 0.1
+    batch_size: 6000
+    num_workers: 32
+    epoch: 500
+    temp: 0.1
+    shuffle: True
+    adaptive_rate: 20
+
+
+common:
+  switch: '2'
+
+  mixed_precision: False
+  device: cuda:0
+  num_workers: 32
+
+  ec_level: 4
+  cluster_mode: 'ec'
+  entropy_threshold: 0.04008728
+
+  ResidueEncoder_model_path: '/raid3/fanxy/project/ClusterSite/ckpt/SwissProt_Enzyme_CDHIT60/exStructure/ResidueEncoder/'
+  SiteSupCon_model_path: '/raid3/fanxy/project/ClusterSite/ckpt/SwissProt_Enzyme_CDHIT60/exStructure/SiteSupCon/'
+  ActiveSiteEmbeddingNet_model_path: '/raid3/fanxy/project/ClusterSite/ckpt/SwissProt_Enzyme_CDHIT60/exStructure/ActiveSiteEmbeddingNet/'
+
+  train_data: '/raid3/fanxy/project/ClusterSite/data/SwissProt_Enzyme/CDHIT60/train.csv'  # path to training data csv file
+  valid_data: '/raid3/fanxy/project/ClusterSite/data/SwissProt_Enzyme/CDHIT60/valid.csv'  # path to validation data csv file
+  test_data: '/raid3/fanxy/project/ClusterSite/data/SwissProt_Enzyme/CDHIT60/test.csv'  # path to test data csv file
+  structure_path: '/raid3/fanxy/matrial/data/alphafolddb_download2/'
+  max_seq_length: 1000
